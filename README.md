@@ -67,10 +67,19 @@ API docs: Swagger UI at <http://localhost:8080/swagger-ui.html>, OpenAPI JSON at
 ## Test
 
 ```bash
-./mvnw test
+./mvnw test      # tests only
+./mvnw verify    # tests + coverage check
 ```
 
 Integration tests start PostgreSQL with Testcontainers. Docker must be running.
+
+`verify` fails when line coverage drops below 80%. Change the limit with `coverage.minimum` in `pom.xml`.
+The HTML report is in `target/site/jacoco/index.html`.
+
+## CI
+
+GitHub Actions (`.github/workflows/ci.yml`) runs `./mvnw verify` on every push to `master`/`main` and on every pull request.
+It uploads the JaCoCo report as the `jacoco-report` artifact.
 
 ## Project layout
 
