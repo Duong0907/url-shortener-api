@@ -29,7 +29,7 @@
 	<properties>
 		<java.version>21</java.version>
 		<jacoco.version>0.8.13</jacoco.version>
-		<coverage.minimum>0.80</coverage.minimum>
+		<coverage.minimum>0.90</coverage.minimum>
 	</properties>
 	<dependencies>
 		<dependency>

@@ -55,7 +55,7 @@ public class UrlValidator {
 
     // ponytail: checks IP literals only, no DNS lookup. The server never fetches the target,
     // so a hostname that resolves to a private IP only harms the visitor's own network.
-    private static boolean isPrivateIpLiteral(String host) {
+    static boolean isPrivateIpLiteral(String host) {
         boolean ipv6 = host.startsWith("[") && host.endsWith("]");
         if (!ipv6 && !IPV4.matcher(host).matches()) {
             return false;
