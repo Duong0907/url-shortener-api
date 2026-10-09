@@ -1,5 +1,6 @@
 package com.urlshortener.link.service;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -60,5 +61,12 @@ class UrlValidatorTest {
     void rejectsUrlsLongerThan2048Characters() {
         String url = "https://example.com/" + "a".repeat(UrlValidator.MAX_LENGTH);
         assertThatThrownBy(() -> validator.validate(url)).isInstanceOf(ResponseStatusException.class);
+    }
+
+    // URI parsing already rejects malformed hosts, so only a direct call reaches the unparsable-literal branch.
+    // An IPv6 literal never triggers a DNS lookup, so this test needs no network.
+    @org.junit.jupiter.api.Test
+    void treatsUnparsableIpLiteralAsPrivate() {
+        assertThat(UrlValidator.isPrivateIpLiteral("[1:2:3]")).isTrue();
     }
 }
