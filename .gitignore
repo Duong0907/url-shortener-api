@@ -33,7 +33,18 @@ build/
 .vscode/
 
 
-### Agents files
+### AI agent files
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
+GEMINI.md
+.cursor/
+.cursorrules
+.windsurf/
+.github/copilot-instructions.md
+.aider*
+.mcp.json
 docs/
 
 ### Local credentials

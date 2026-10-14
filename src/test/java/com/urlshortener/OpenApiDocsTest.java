@@ -27,6 +27,16 @@ class OpenApiDocsTest {
     }
 
     @Test
+    void documentsErrorResponsesAsProblemJson() throws Exception {
+        mvc.perform(get("/v3/api-docs"))
+                .andExpect(jsonPath(
+                        "$.paths['/api/links'].post.responses['400'].content['application/problem+json'].examples")
+                        .isMap())
+                .andExpect(jsonPath("$.paths['/{slug}'].get.responses['404'].content['application/problem+json']")
+                        .exists());
+    }
+
+    @Test
     void servesSwaggerUi() throws Exception {
         mvc.perform(get("/swagger-ui/index.html")).andExpect(status().isOk());
     }
