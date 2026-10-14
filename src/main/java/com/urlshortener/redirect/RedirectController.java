@@ -23,24 +23,34 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "Redirect")
 public class RedirectController {
 
-  private final SlugResolver resolver;
+    private final SlugResolver resolver;
 
-  // 302 + no-store, never 301: browsers cache a 301 forever, so a disabled link
-  // would keep working.
-  @GetMapping("/{slug:[A-Za-z0-9_-]{3,32}}")
-  @Operation(summary = "Open a short link")
-  @ApiResponse(responseCode = "302", description = "Redirect to the target URL")
-  @ApiResponse(responseCode = "404", description = "Short link not found (urn:problem:link-not-found)", content = @Content(mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE, schema = @Schema(implementation = ProblemDetail.class), examples = @ExampleObject(value = """
-      {
-        "type": "urn:problem:link-not-found",
-        "title": "Short link not found",
-        "status": 404,
-        "detail": "Short link not found"
-      }""")))
-  public ResponseEntity<Void> redirect(@PathVariable String slug) {
-    return ResponseEntity.status(HttpStatus.FOUND)
-        .location(URI.create(resolver.resolve(slug)))
-        .cacheControl(CacheControl.noStore())
-        .build();
-  }
+    // 302 + no-store, never 301: browsers cache a 301 forever, so a disabled link
+    // would keep working.
+    @GetMapping("/{slug:[A-Za-z0-9_-]{3,32}}")
+    @Operation(summary = "Open a short link")
+    @ApiResponse(responseCode = "302", description = "Redirect to the target URL")
+    @ApiResponse(
+        responseCode = "404",
+        description = "Short link not found (urn:problem:link-not-found)",
+        content = @Content(
+            mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+            schema = @Schema(implementation = ProblemDetail.class),
+            examples = @ExampleObject(
+                value = """
+                {
+                  "type": "urn:problem:link-not-found",
+                  "title": "Short link not found",
+                  "status": 404,
+                  "detail": "Short link not found"
+                }"""
+            )
+        )
+    )
+    public ResponseEntity<Void> redirect(@PathVariable String slug) {
+        return ResponseEntity.status(HttpStatus.FOUND)
+            .location(URI.create(resolver.resolve(slug)))
+            .cacheControl(CacheControl.noStore())
+            .build();
+    }
 }

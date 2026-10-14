@@ -7,7 +7,8 @@ import org.springframework.stereotype.Component;
 public class SlugGenerator {
 
     static final int LENGTH = 7;
-    private static final String ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    private static final String ALPHABET =
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
     private final SecureRandom random = new SecureRandom();
 

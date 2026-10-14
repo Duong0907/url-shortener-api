@@ -75,11 +75,13 @@ public class UrlValidator {
             byte[] bytes = address.getAddress();
             boolean uniqueLocalV6 = bytes.length == 16 && (bytes[0] & 0xfe) == 0xfc;
 
-            return address.isLoopbackAddress()
-                    || address.isSiteLocalAddress()
-                    || address.isLinkLocalAddress()
-                    || address.isAnyLocalAddress()
-                    || uniqueLocalV6;
+            return (
+                address.isLoopbackAddress() ||
+                address.isSiteLocalAddress() ||
+                address.isLinkLocalAddress() ||
+                address.isAnyLocalAddress() ||
+                uniqueLocalV6
+            );
         } catch (UnknownHostException e) {
             return true;
         }

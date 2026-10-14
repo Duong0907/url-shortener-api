@@ -1,0 +1,12 @@
+{
+  "name": "url-shortener-api",
+  "private": true,
+  "scripts": {
+    "format": "prettier --write \"src/**/*.java\"",
+    "format:check": "prettier --check \"src/**/*.java\""
+  },
+  "devDependencies": {
+    "prettier": "3.9.10",
+    "prettier-plugin-java": "2.11.0"
+  }
+}

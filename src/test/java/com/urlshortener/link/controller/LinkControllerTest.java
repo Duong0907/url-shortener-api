@@ -25,31 +25,43 @@ class LinkControllerTest {
 
     @Test
     void createsAnonymousLink() throws Exception {
-        mvc.perform(post("/api/links").contentType(MediaType.APPLICATION_JSON)
-                .content("{\"targetUrl\":\"https://example.com/page\"}"))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.slug").value(matchesPattern("[0-9A-Za-z]{7}")))
-                .andExpect(jsonPath("$.shortUrl").value(matchesPattern("http://localhost:8080/[0-9A-Za-z]{7}")))
-                .andExpect(jsonPath("$.targetUrl").value("https://example.com/page"))
-                .andExpect(jsonPath("$.active").value(true));
+        mvc.perform(
+            post("/api/links")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"targetUrl\":\"https://example.com/page\"}")
+        )
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.slug").value(matchesPattern("[0-9A-Za-z]{7}")))
+            .andExpect(
+                jsonPath("$.shortUrl").value(matchesPattern("http://localhost:8080/[0-9A-Za-z]{7}"))
+            )
+            .andExpect(jsonPath("$.targetUrl").value("https://example.com/page"))
+            .andExpect(jsonPath("$.active").value(true));
     }
 
     @Test
     void rejectsBlankTargetUrlAsProblemJson() throws Exception {
-        mvc.perform(post("/api/links").contentType(MediaType.APPLICATION_JSON).content("{\"targetUrl\":\"\"}"))
-                .andExpect(status().isBadRequest())
-                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
-                .andExpect(jsonPath("$.type").value("urn:problem:validation-failed"))
-                .andExpect(jsonPath("$.errors[0].field").value("targetUrl"));
+        mvc.perform(
+            post("/api/links")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"targetUrl\":\"\"}")
+        )
+            .andExpect(status().isBadRequest())
+            .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+            .andExpect(jsonPath("$.type").value("urn:problem:validation-failed"))
+            .andExpect(jsonPath("$.errors[0].field").value("targetUrl"));
     }
 
     @Test
     void rejectsUnsafeTargetUrlAsProblemJson() throws Exception {
-        mvc.perform(post("/api/links").contentType(MediaType.APPLICATION_JSON)
-                .content("{\"targetUrl\":\"javascript:alert(1)\"}"))
-                .andExpect(status().isBadRequest())
-                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
-                .andExpect(jsonPath("$.type").value("urn:problem:url-invalid"))
-                .andExpect(jsonPath("$.detail").value("Only http and https URLs are allowed"));
+        mvc.perform(
+            post("/api/links")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"targetUrl\":\"javascript:alert(1)\"}")
+        )
+            .andExpect(status().isBadRequest())
+            .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+            .andExpect(jsonPath("$.type").value("urn:problem:url-invalid"))
+            .andExpect(jsonPath("$.detail").value("Only http and https URLs are allowed"));
     }
 }

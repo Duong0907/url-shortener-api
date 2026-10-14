@@ -25,6 +25,17 @@ jobs:
           java-version: 21
           cache: maven
 
+      # Fail fast on unformatted Java. Fix locally with: npm run format
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check Java formatting
+        run: |
+          npm ci
+          npm run format:check
+
       # Docker is preinstalled on ubuntu-latest, so Testcontainers starts Postgres 16 itself.
       # verify = tests + JaCoCo report + coverage threshold (pom.xml: coverage.minimum).
       - name: Build, test and check coverage

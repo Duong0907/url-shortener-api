@@ -14,19 +14,22 @@ class UrlValidatorTest {
     private final UrlValidator validator = new UrlValidator("https://sho.rt");
 
     @ParameterizedTest
-    @ValueSource(strings = {
+    @ValueSource(
+        strings = {
             "https://example.com",
             "http://example.com/path?q=1#frag",
             "HTTPS://Example.com",
             "https://8.8.8.8/dns",
-            "https://[2001:4860:4860::8888]/"
-    })
+            "https://[2001:4860:4860::8888]/",
+        }
+    )
     void acceptsPublicHttpUrls(String url) {
         assertThatCode(() -> validator.validate(url)).doesNotThrowAnyException();
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {
+    @ValueSource(
+        strings = {
             "",
             "   ",
             "not a url",
@@ -47,24 +50,31 @@ class UrlValidatorTest {
             "http://0.0.0.0",
             "http://[::1]/",
             "http://[fd00::1]/",
-            "http://999.1.1.1"
-    })
+            "http://999.1.1.1",
+        }
+    )
     void rejectsUnsafeOrInvalidUrls(String url) {
-        assertThatThrownBy(() -> validator.validate(url)).isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getErrorType()).isEqualTo(ErrorType.URL_INVALID));
+        assertThatThrownBy(() -> validator.validate(url)).isInstanceOfSatisfying(
+            ApiException.class,
+            e -> assertThat(e.getErrorType()).isEqualTo(ErrorType.URL_INVALID)
+        );
     }
 
     @org.junit.jupiter.api.Test
     void rejectsNull() {
-        assertThatThrownBy(() -> validator.validate(null)).isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getErrorType()).isEqualTo(ErrorType.URL_INVALID));
+        assertThatThrownBy(() -> validator.validate(null)).isInstanceOfSatisfying(
+            ApiException.class,
+            e -> assertThat(e.getErrorType()).isEqualTo(ErrorType.URL_INVALID)
+        );
     }
 
     @org.junit.jupiter.api.Test
     void rejectsUrlsLongerThan2048Characters() {
         String url = "https://example.com/" + "a".repeat(UrlValidator.MAX_LENGTH);
-        assertThatThrownBy(() -> validator.validate(url)).isInstanceOfSatisfying(ApiException.class,
-                e -> assertThat(e.getErrorType()).isEqualTo(ErrorType.URL_INVALID));
+        assertThatThrownBy(() -> validator.validate(url)).isInstanceOfSatisfying(
+            ApiException.class,
+            e -> assertThat(e.getErrorType()).isEqualTo(ErrorType.URL_INVALID)
+        );
     }
 
     // URI parsing already rejects malformed hosts, so only a direct call reaches
