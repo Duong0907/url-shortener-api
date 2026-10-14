@@ -36,15 +36,28 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     @Override
     protected ResponseEntity<Object> handleMethodArgumentNotValid(
-            MethodArgumentNotValidException ex,
-            HttpHeaders headers,
-            HttpStatusCode status,
-            WebRequest request) {
-
-        ProblemDetail problem = problem(ErrorType.VALIDATION_FAILED, "One or more fields are invalid");
-        List<Map<String, String>> errors = ex.getBindingResult().getFieldErrors().stream()
-                .map(error -> Map.of("field", error.getField(), "message", String.valueOf(error.getDefaultMessage())))
-                .toList();
+        MethodArgumentNotValidException ex,
+        HttpHeaders headers,
+        HttpStatusCode status,
+        WebRequest request
+    ) {
+        ProblemDetail problem = problem(
+            ErrorType.VALIDATION_FAILED,
+            "One or more fields are invalid"
+        );
+        List<Map<String, String>> errors = ex
+            .getBindingResult()
+            .getFieldErrors()
+            .stream()
+            .map(error ->
+                Map.of(
+                    "field",
+                    error.getField(),
+                    "message",
+                    String.valueOf(error.getDefaultMessage())
+                )
+            )
+            .toList();
         problem.setProperty("errors", errors);
 
         return ResponseEntity.status(problem.getStatus()).body(problem);

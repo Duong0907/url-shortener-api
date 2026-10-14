@@ -60,7 +60,8 @@ class LinkServiceTest {
         links.saveAndFlush(new Link("taken00", "https://example.com", null, false, null, null));
         when(slugs.next()).thenReturn("taken00");
 
-        assertThatThrownBy(() -> service.create("https://example.org", null))
-                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> service.create("https://example.org", null)).isInstanceOf(
+            DataIntegrityViolationException.class
+        );
     }
 }

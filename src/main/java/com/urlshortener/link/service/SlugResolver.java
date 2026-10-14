@@ -15,8 +15,9 @@ public class SlugResolver {
     private final LinkRepository links;
 
     public String resolve(String slug) {
-        return links.findBySlug(slug)
-                .map(Link::getTargetUrl)
-                .orElseThrow(() -> new ApiException(ErrorType.LINK_NOT_FOUND, "Short link not found"));
+        return links
+            .findBySlug(slug)
+            .map(Link::getTargetUrl)
+            .orElseThrow(() -> new ApiException(ErrorType.LINK_NOT_FOUND, "Short link not found"));
     }
 }

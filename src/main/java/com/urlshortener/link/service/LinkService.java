@@ -23,7 +23,9 @@ public class LinkService {
         urls.validate(targetUrl);
         for (int attempt = 1; ; attempt++) {
             try {
-                return links.saveAndFlush(new Link(slugs.next(), targetUrl, null, false, null, createdIp));
+                return links.saveAndFlush(
+                    new Link(slugs.next(), targetUrl, null, false, null, createdIp)
+                );
             } catch (DataIntegrityViolationException e) {
                 if (!isSlugConflict(e) || attempt == MAX_SLUG_ATTEMPTS) {
                     throw e;

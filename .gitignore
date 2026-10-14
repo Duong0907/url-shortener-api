@@ -49,3 +49,6 @@ docs/
 
 ### Local credentials
 .env
+
+### Node (Prettier) ###
+node_modules/

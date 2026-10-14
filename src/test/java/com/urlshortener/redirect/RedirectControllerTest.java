@@ -36,21 +36,23 @@ class RedirectControllerTest {
 
     @Test
     void redirectsWith302AndNoStore() throws Exception {
-        links.saveAndFlush(new Link("abc1234", "https://example.com/page", null, false, null, null));
+        links.saveAndFlush(
+            new Link("abc1234", "https://example.com/page", null, false, null, null)
+        );
 
         mvc.perform(get("/abc1234"))
-                .andExpect(status().isFound())
-                .andExpect(header().string("Location", "https://example.com/page"))
-                .andExpect(header().string("Cache-Control", "no-store"));
+            .andExpect(status().isFound())
+            .andExpect(header().string("Location", "https://example.com/page"))
+            .andExpect(header().string("Cache-Control", "no-store"));
     }
 
     @Test
     void returns404ForUnknownSlug() throws Exception {
         mvc.perform(get("/nope123"))
-                .andExpect(status().isNotFound())
-                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
-                .andExpect(jsonPath("$.type").value("urn:problem:link-not-found"))
-                .andExpect(jsonPath("$.status").value(404));
+            .andExpect(status().isNotFound())
+            .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+            .andExpect(jsonPath("$.type").value("urn:problem:link-not-found"))
+            .andExpect(jsonPath("$.status").value(404));
     }
 
     @Test

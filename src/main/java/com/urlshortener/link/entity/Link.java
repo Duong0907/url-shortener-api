@@ -50,7 +50,14 @@ public class Link {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
-    public Link(String slug, String targetUrl, UUID ownerId, boolean custom, Instant expiresAt, String createdIp) {
+    public Link(
+        String slug,
+        String targetUrl,
+        UUID ownerId,
+        boolean custom,
+        Instant expiresAt,
+        String createdIp
+    ) {
         this.slug = slug;
         this.targetUrl = targetUrl;
         this.ownerId = ownerId;
