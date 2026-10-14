@@ -14,6 +14,17 @@ public enum ErrorType {
         "Request validation failed",
         HttpStatus.BAD_REQUEST
     ),
+    EMAIL_TAKEN("urn:problem:email-taken", "Email is already registered", HttpStatus.CONFLICT),
+    INVALID_CREDENTIALS(
+        "urn:problem:invalid-credentials",
+        "Invalid email or password",
+        HttpStatus.UNAUTHORIZED
+    ),
+    REFRESH_TOKEN_INVALID(
+        "urn:problem:refresh-token-invalid",
+        "Refresh token is invalid",
+        HttpStatus.UNAUTHORIZED
+    ),
     INTERNAL_ERROR(
         "urn:problem:internal-error",
         "Internal server error",
