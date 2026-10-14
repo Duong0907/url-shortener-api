@@ -4,9 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.urlshortener.error.ApiException;
+import com.urlshortener.error.ErrorType;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.springframework.web.server.ResponseStatusException;
 
 class UrlValidatorTest {
 
@@ -49,21 +50,25 @@ class UrlValidatorTest {
             "http://999.1.1.1"
     })
     void rejectsUnsafeOrInvalidUrls(String url) {
-        assertThatThrownBy(() -> validator.validate(url)).isInstanceOf(ResponseStatusException.class);
+        assertThatThrownBy(() -> validator.validate(url)).isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getErrorType()).isEqualTo(ErrorType.URL_INVALID));
     }
 
     @org.junit.jupiter.api.Test
     void rejectsNull() {
-        assertThatThrownBy(() -> validator.validate(null)).isInstanceOf(ResponseStatusException.class);
+        assertThatThrownBy(() -> validator.validate(null)).isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getErrorType()).isEqualTo(ErrorType.URL_INVALID));
     }
 
     @org.junit.jupiter.api.Test
     void rejectsUrlsLongerThan2048Characters() {
         String url = "https://example.com/" + "a".repeat(UrlValidator.MAX_LENGTH);
-        assertThatThrownBy(() -> validator.validate(url)).isInstanceOf(ResponseStatusException.class);
+        assertThatThrownBy(() -> validator.validate(url)).isInstanceOfSatisfying(ApiException.class,
+                e -> assertThat(e.getErrorType()).isEqualTo(ErrorType.URL_INVALID));
     }
 
-    // URI parsing already rejects malformed hosts, so only a direct call reaches the unparsable-literal branch.
+    // URI parsing already rejects malformed hosts, so only a direct call reaches
+    // the unparsable-literal branch.
     // An IPv6 literal never triggers a DNS lookup, so this test needs no network.
     @org.junit.jupiter.api.Test
     void treatsUnparsableIpLiteralAsPrivate() {
