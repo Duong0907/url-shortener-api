@@ -35,6 +35,13 @@ Or run the app with a disposable Testcontainers database (Docker required, no `.
 ./mvnw spring-boot:test-run
 ```
 
+Registration sends a verification email. For local development, run Mailpit and read the mails
+at <http://localhost:8025>:
+
+```bash
+docker run -d --name mailpit -p 1025:1025 -p 8025:8025 axllent/mailpit
+```
+
 ## Configuration
 
 The app reads `.env` in the repository root at startup. `.env` is git-ignored. Never commit it.
@@ -46,6 +53,14 @@ Real environment variables override `.env`.
 | `DATABASE_USERNAME` | empty                                          | Database user               |
 | `DATABASE_PASSWORD` | empty                                          | Database password           |
 | `APP_BASE_URL`      | `http://localhost:8080`                        | Prefix of returned short URLs |
+| `UI_BASE_URL`       | `http://localhost:3000`                        | Prefix of the link in the verification email |
+| `MAIL_HOST`         | `localhost`                                    | SMTP host                   |
+| `MAIL_PORT`         | `1025`                                         | SMTP port                   |
+| `MAIL_FROM`         | `no-reply@urlshortener.local`                  | Sender address              |
+| `MAIL_USERNAME`     | empty                                          | SMTP user                   |
+| `MAIL_PASSWORD`     | empty                                          | SMTP password               |
+| `MAIL_AUTH`         | `false`                                        | Set `true` for SMTP login   |
+| `MAIL_STARTTLS`     | `false`                                        | Set `true` for STARTTLS     |
 
 ## API
 
@@ -54,6 +69,10 @@ Real environment variables override `.env`.
 | POST   | `/api/links`  | `201` with the new short link                  |
 | GET    | `/{slug}`     | `302` to the target URL, `404` if unknown      |
 | GET    | `/health`     | Health status                                  |
+| POST   | `/api/auth/register` | `201`; needs `confirmPassword`; sends a verification email |
+| POST   | `/api/auth/verify-email` | `204`, or `400` for an unknown, expired or used token |
+| POST   | `/api/auth/resend-verification` | `204` always |
+| POST   | `/api/auth/login` | `200` with an access token; `403` until the email is verified |
 
 ```bash
 curl -X POST localhost:8080/api/links -H 'Content-Type: application/json' \

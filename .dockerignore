@@ -1,0 +1,10 @@
+# Keep secrets and build output out of the image context.
+.env.*
+*.pem
+target
+node_modules
+.git
+.github
+.vscode
+.claude
+docs

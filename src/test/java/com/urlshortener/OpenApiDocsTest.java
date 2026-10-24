@@ -54,6 +54,12 @@ class OpenApiDocsTest {
             .andExpect(jsonPath("$.paths['/api/auth/register'].post.responses['201']").exists())
             .andExpect(jsonPath("$.paths['/api/auth/register'].post.responses['409']").exists())
             .andExpect(jsonPath("$.paths['/api/auth/login'].post.responses['401']").exists())
+            .andExpect(jsonPath("$.paths['/api/auth/login'].post.responses['403']").exists())
+            .andExpect(jsonPath("$.paths['/api/auth/verify-email'].post.responses['204']").exists())
+            .andExpect(jsonPath("$.paths['/api/auth/verify-email'].post.responses['400']").exists())
+            .andExpect(
+                jsonPath("$.paths['/api/auth/resend-verification'].post.responses['204']").exists()
+            )
             .andExpect(jsonPath("$.paths['/api/auth/refresh'].post.responses['401']").exists())
             .andExpect(jsonPath("$.paths['/api/auth/logout'].post.responses['204']").exists());
     }

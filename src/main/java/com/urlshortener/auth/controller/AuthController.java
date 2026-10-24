@@ -3,7 +3,9 @@ package com.urlshortener.auth.controller;
 import com.urlshortener.auth.dto.AccessTokenResponse;
 import com.urlshortener.auth.dto.LoginRequest;
 import com.urlshortener.auth.dto.RegisterRequest;
+import com.urlshortener.auth.dto.ResendVerificationRequest;
 import com.urlshortener.auth.dto.UserResponse;
+import com.urlshortener.auth.dto.VerifyEmailRequest;
 import com.urlshortener.auth.entity.User;
 import com.urlshortener.auth.service.AuthService;
 import com.urlshortener.error.ApiException;
@@ -45,12 +47,16 @@ public class AuthController {
 
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Create an account")
+    @Operation(
+        summary = "Create an account",
+        description = "Sends a verification email. The account cannot log in until it is verified."
+    )
     @ApiResponse(responseCode = "400", description = "Invalid email or password")
     @ApiResponse(responseCode = "409", description = "Email is already registered")
     public UserResponse register(@Valid @RequestBody RegisterRequest body) {
         User user = auth.register(body.email(), body.password());
-        return new UserResponse(user.getId(), user.getEmail());
+
+        return new UserResponse(user.getId(), user.getEmail(), user.isEmailVerified());
     }
 
     @PostMapping("/login")
@@ -60,6 +66,7 @@ public class AuthController {
     )
     @ApiResponse(responseCode = "200", description = "Access token; refresh_token cookie is set")
     @ApiResponse(responseCode = "401", description = "Invalid email or password")
+    @ApiResponse(responseCode = "403", description = "Email is not verified")
     public ResponseEntity<AccessTokenResponse> login(@Valid @RequestBody LoginRequest body) {
         return withTokens(auth.login(body.email(), body.password()));
     }
@@ -98,6 +105,31 @@ public class AuthController {
         return ResponseEntity.noContent()
             .header(HttpHeaders.SET_COOKIE, refreshCookie("", Duration.ZERO).toString())
             .build();
+    }
+
+    @PostMapping("/verify-email")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Operation(
+        summary = "Verify an email address",
+        description = "Consumes the token from the verification email. A token works once."
+    )
+    @ApiResponse(responseCode = "204", description = "Email verified")
+    @ApiResponse(responseCode = "400", description = "Token is unknown, expired or already used")
+    public void verifyEmail(@Valid @RequestBody VerifyEmailRequest body) {
+        auth.verifyEmail(body.token());
+    }
+
+    @PostMapping("/resend-verification")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Operation(
+        summary = "Send a new verification email",
+        description = "Always returns 204, so it does not reveal which emails are registered. " +
+            "The new link replaces any earlier link."
+    )
+    @ApiResponse(responseCode = "204", description = "Accepted")
+    @ApiResponse(responseCode = "400", description = "Malformed email")
+    public void resendVerification(@Valid @RequestBody ResendVerificationRequest body) {
+        auth.resendVerification(body.email());
     }
 
     private ResponseEntity<AccessTokenResponse> withTokens(AuthService.Tokens tokens) {

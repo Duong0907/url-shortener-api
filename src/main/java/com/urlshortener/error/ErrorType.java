@@ -25,6 +25,16 @@ public enum ErrorType {
         "Refresh token is invalid",
         HttpStatus.UNAUTHORIZED
     ),
+    EMAIL_NOT_VERIFIED(
+        "urn:problem:email-not-verified",
+        "Email is not verified",
+        HttpStatus.FORBIDDEN
+    ),
+    EMAIL_VERIFICATION_TOKEN_INVALID(
+        "urn:problem:email-verification-token-invalid",
+        "Verification token is invalid",
+        HttpStatus.BAD_REQUEST
+    ),
     INTERNAL_ERROR(
         "urn:problem:internal-error",
         "Internal server error",

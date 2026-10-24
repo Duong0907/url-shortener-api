@@ -1,6 +1,9 @@
 package com.urlshortener.auth.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import com.urlshortener.TestcontainersConfiguration;
 import com.urlshortener.auth.entity.RefreshToken;
@@ -10,6 +13,7 @@ import com.urlshortener.auth.repository.UserRepository;
 import com.urlshortener.auth.service.AuthService.Tokens;
 import com.urlshortener.error.ApiException;
 import com.urlshortener.error.ErrorType;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -20,9 +24,11 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 // Real threads against a real Postgres. These races are hard to reproduce by hand.
 // Not @Transactional: every call must commit for real, like production requests.
@@ -41,6 +47,10 @@ class AuthServiceConcurrencyTest {
     @Autowired
     RefreshTokenRepository refreshTokens;
 
+    // No SMTP server in tests. The mock also captures the raw tokens that would be mailed.
+    @MockitoBean
+    VerificationMailer mailer;
+
     @BeforeEach
     void cleanDatabase() {
         refreshTokens.deleteAll();
@@ -50,6 +60,7 @@ class AuthServiceConcurrencyTest {
     @Test
     void parallelRefreshWithOneTokenSucceedsExactlyOnce() throws Exception {
         service.register("alice@example.com", "correct-horse");
+        markVerified("alice@example.com");
         String token = service.login("alice@example.com", "correct-horse").refreshToken();
 
         List<Object> results = runInParallel(THREADS, () -> service.refresh(token));
@@ -103,6 +114,97 @@ class AuthServiceConcurrencyTest {
 
         assertThat(results.stream().filter(r -> r instanceof ApiException)).hasSize(2);
         assertThat(users.count()).isEqualTo(1);
+    }
+
+    @Test
+    void parallelVerifyWithOneTokenSucceedsExactlyOnce() throws Exception {
+        saveUnverifiedUserWithToken("alice@example.com", "raw-token");
+
+        List<Object> results = runInParallel(THREADS, () -> {
+            service.verifyEmail("raw-token");
+
+            return "verified";
+        });
+
+        assertThat(results.stream().filter(r -> r.equals("verified"))).hasSize(1);
+        assertThat(results.stream().filter(r -> r instanceof ApiException))
+            .hasSize(THREADS - 1)
+            .allSatisfy(r ->
+                assertThat(((ApiException) r).getErrorType()).isEqualTo(
+                    ErrorType.EMAIL_VERIFICATION_TOKEN_INVALID
+                )
+            );
+        User user = users.findByEmail("alice@example.com").orElseThrow();
+        assertThat(user.isEmailVerified()).isTrue();
+        assertThat(user.getVerificationTokenHash()).isNull();
+    }
+
+    @Test
+    void parallelResendsLeaveExactlyOneLiveToken() throws Exception {
+        saveUnverifiedUserWithToken("alice@example.com", "old-token");
+
+        runInParallel(THREADS, () -> {
+            service.resendVerification("alice@example.com");
+
+            return "sent";
+        });
+
+        ArgumentCaptor<String> sent = ArgumentCaptor.forClass(String.class);
+        verify(mailer, times(THREADS)).sendVerification(eq("alice@example.com"), sent.capture());
+        String stored = users
+            .findByEmail("alice@example.com")
+            .orElseThrow()
+            .getVerificationTokenHash();
+        assertThat(sent.getAllValues()).doesNotHaveDuplicates();
+        assertThat(
+            sent
+                .getAllValues()
+                .stream()
+                .filter(t -> AuthService.hash(t).equals(stored))
+        ).hasSize(1);
+        assertThat(sent.getAllValues()).doesNotContain("old-token");
+    }
+
+    @Test
+    void aResendRacingWithAVerifyNeverUndoesTheVerification() throws Exception {
+        saveUnverifiedUserWithToken("alice@example.com", "raw-token");
+        int[] next = { 0 };
+
+        runInParallel(THREADS, () -> {
+            int turn;
+            synchronized (next) {
+                turn = next[0]++;
+            }
+            if (turn == 0) {
+                service.verifyEmail("raw-token");
+            } else {
+                service.resendVerification("alice@example.com");
+            }
+
+            return "done";
+        });
+
+        // The verify may lose to a resend (its token was replaced). If it wins, no resend may
+        // bring the token back or flip email_verified to false.
+        User user = users.findByEmail("alice@example.com").orElseThrow();
+        if (user.isEmailVerified()) {
+            assertThat(user.getVerificationTokenHash()).isNull();
+            assertThat(user.getVerificationExpiresAt()).isNull();
+        } else {
+            assertThat(user.getVerificationTokenHash()).isNotNull();
+        }
+    }
+
+    private void markVerified(String email) {
+        User user = users.findByEmail(email).orElseThrow();
+        user.verifyEmail();
+        users.save(user);
+    }
+
+    private void saveUnverifiedUserWithToken(String email, String rawToken) {
+        User user = new User(email, "hash");
+        user.startVerification(AuthService.hash(rawToken), Instant.now().plusSeconds(600));
+        users.saveAndFlush(user);
     }
 
     // Starts all callables at the same moment and returns each result or thrown exception.

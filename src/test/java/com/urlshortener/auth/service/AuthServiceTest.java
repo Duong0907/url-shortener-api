@@ -3,7 +3,10 @@ package com.urlshortener.auth.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -44,6 +47,7 @@ class AuthServiceTest {
 
     static final Duration ACCESS_TTL = Duration.ofMinutes(15);
     static final Duration REFRESH_TTL = Duration.ofDays(30);
+    static final Duration VERIFICATION_TTL = Duration.ofHours(24);
     static final SecretKey KEY = new SecretKeySpec(
         "test-only-secret-that-is-at-least-32-bytes".getBytes(StandardCharsets.UTF_8),
         "HmacSHA256"
@@ -58,6 +62,9 @@ class AuthServiceTest {
     @Mock
     PasswordEncoder passwords;
 
+    @Mock
+    VerificationMailer mailer;
+
     JwtDecoder decoder = NimbusJwtDecoder.withSecretKey(KEY)
         .macAlgorithm(MacAlgorithm.HS256)
         .build();
@@ -71,8 +78,10 @@ class AuthServiceTest {
             refreshTokens,
             passwords,
             new NimbusJwtEncoder(new ImmutableSecret<>(KEY)),
+            mailer,
             ACCESS_TTL,
-            REFRESH_TTL
+            REFRESH_TTL,
+            VERIFICATION_TTL
         );
     }
 
@@ -389,13 +398,233 @@ class AuthServiceTest {
         assertThat(service.refreshTtl()).isEqualTo(REFRESH_TTL);
     }
 
+    // ---------- register: verification ----------
+
+    @Test
+    void registerStoresOnlyTheHashOfTheVerificationToken() {
+        when(passwords.encode(any())).thenReturn("encoded");
+        when(users.saveAndFlush(any(User.class))).thenAnswer(call -> call.getArgument(0));
+
+        User user = service.register("alice@example.com", "correct-horse");
+
+        String rawToken = sentToken("alice@example.com");
+        assertThat(rawToken).isNotBlank();
+        assertThat(user.getVerificationTokenHash()).isEqualTo(AuthService.hash(rawToken));
+        assertThat(user.getVerificationTokenHash()).isNotEqualTo(rawToken);
+        assertThat(user.isEmailVerified()).isFalse();
+    }
+
+    @Test
+    void registerGivesTheTokenTheConfiguredLifetime() {
+        when(passwords.encode(any())).thenReturn("encoded");
+        when(users.saveAndFlush(any(User.class))).thenAnswer(call -> call.getArgument(0));
+        Instant before = Instant.now();
+
+        User user = service.register("alice@example.com", "correct-horse");
+
+        assertThat(user.getVerificationExpiresAt()).isBetween(
+            before.plus(VERIFICATION_TTL),
+            Instant.now().plus(VERIFICATION_TTL)
+        );
+    }
+
+    @Test
+    void registerMailsTheNormalizedAddress() {
+        when(passwords.encode(any())).thenReturn("encoded");
+        when(users.saveAndFlush(any(User.class))).thenAnswer(call -> call.getArgument(0));
+
+        service.register("  Alice@Example.COM ", "correct-horse");
+
+        verify(mailer).sendVerification(eq("alice@example.com"), any());
+    }
+
+    @Test
+    void registerSendsNothingWhenTheEmailIsTaken() {
+        when(passwords.encode(any())).thenReturn("encoded");
+        when(users.saveAndFlush(any(User.class))).thenThrow(
+            new DataIntegrityViolationException(
+                "could not execute statement",
+                new SQLException(
+                    "ERROR: duplicate key value violates unique constraint \"uk_users_email\""
+                )
+            )
+        );
+
+        thrownBy(() -> service.register("a@example.com", "password1"));
+
+        verify(mailer, never()).sendVerification(any(), any());
+    }
+
+    @Test
+    void registerSendsNothingWhenSavingFailsForAnotherReason() {
+        when(passwords.encode(any())).thenReturn("encoded");
+        when(users.saveAndFlush(any(User.class))).thenThrow(
+            new DataIntegrityViolationException("other", new SQLException("something else"))
+        );
+
+        assertThatThrownBy(() -> service.register("a@example.com", "password1")).isInstanceOf(
+            DataIntegrityViolationException.class
+        );
+
+        verify(mailer, never()).sendVerification(any(), any());
+    }
+
+    @Test
+    void everyRegistrationGetsADifferentToken() {
+        when(passwords.encode(any())).thenReturn("encoded");
+        when(users.saveAndFlush(any(User.class))).thenAnswer(call -> call.getArgument(0));
+
+        service.register("a@example.com", "password1");
+        service.register("b@example.com", "password1");
+
+        assertThat(sentToken("a@example.com")).isNotEqualTo(sentToken("b@example.com"));
+    }
+
+    // ---------- login: verification gate ----------
+
+    @Test
+    void loginRejectsAnUnverifiedEmailEvenWithTheCorrectPassword() {
+        User user = unverifiedUserWithId("alice@example.com", "hash");
+        when(users.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+        when(passwords.matches("correct-horse", "hash")).thenReturn(true);
+
+        ApiException error = thrownBy(() -> service.login("alice@example.com", "correct-horse"));
+
+        assertThat(error.getErrorType()).isEqualTo(ErrorType.EMAIL_NOT_VERIFIED);
+        verify(refreshTokens, never()).save(any());
+    }
+
+    @Test
+    void loginHidesTheVerificationStateFromSomeoneWhoDoesNotKnowThePassword() {
+        User user = unverifiedUserWithId("alice@example.com", "hash");
+        when(users.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+        when(passwords.matches("wrong-password", "hash")).thenReturn(false);
+
+        ApiException error = thrownBy(() -> service.login("alice@example.com", "wrong-password"));
+
+        assertThat(error.getErrorType()).isEqualTo(ErrorType.INVALID_CREDENTIALS);
+    }
+
+    // ---------- verifyEmail ----------
+
+    @Test
+    void verifyEmailMarksTheUserVerifiedAndClearsTheToken() {
+        User user = unverifiedUserWithId("alice@example.com", "hash");
+        user.startVerification(AuthService.hash("raw-token"), Instant.now().plusSeconds(60));
+        when(users.findByVerificationTokenHash(AuthService.hash("raw-token"))).thenReturn(
+            Optional.of(user)
+        );
+
+        service.verifyEmail("raw-token");
+
+        assertThat(user.isEmailVerified()).isTrue();
+        assertThat(user.getVerificationTokenHash()).isNull();
+    }
+
+    @Test
+    void verifyEmailLooksUpTheHashNotTheRawToken() {
+        when(users.findByVerificationTokenHash(any())).thenReturn(Optional.empty());
+
+        thrownBy(() -> service.verifyEmail("raw-token"));
+
+        verify(users).findByVerificationTokenHash(AuthService.hash("raw-token"));
+    }
+
+    @Test
+    void verifyEmailRejectsAnUnknownToken() {
+        when(users.findByVerificationTokenHash(any())).thenReturn(Optional.empty());
+
+        ApiException error = thrownBy(() -> service.verifyEmail("nope"));
+
+        assertThat(error.getErrorType()).isEqualTo(ErrorType.EMAIL_VERIFICATION_TOKEN_INVALID);
+    }
+
+    @Test
+    void verifyEmailRejectsAnExpiredTokenAndLeavesTheUserUnverified() {
+        User user = unverifiedUserWithId("alice@example.com", "hash");
+        user.startVerification(AuthService.hash("raw-token"), Instant.now().minusSeconds(1));
+        when(users.findByVerificationTokenHash(AuthService.hash("raw-token"))).thenReturn(
+            Optional.of(user)
+        );
+
+        ApiException error = thrownBy(() -> service.verifyEmail("raw-token"));
+
+        assertThat(error.getErrorType()).isEqualTo(ErrorType.EMAIL_VERIFICATION_TOKEN_INVALID);
+        assertThat(user.isEmailVerified()).isFalse();
+    }
+
+    // ---------- resendVerification ----------
+
+    @Test
+    void resendStoresAFreshHashAndMailsTheRawToken() {
+        when(users.replaceVerificationToken(eq("alice@example.com"), any(), any())).thenReturn(1);
+        ArgumentCaptor<String> storedHash = ArgumentCaptor.forClass(String.class);
+
+        service.resendVerification("alice@example.com");
+
+        verify(users).replaceVerificationToken(
+            eq("alice@example.com"),
+            storedHash.capture(),
+            any(Instant.class)
+        );
+        assertThat(storedHash.getValue()).isEqualTo(
+            AuthService.hash(sentToken("alice@example.com"))
+        );
+    }
+
+    @Test
+    void resendNormalizesTheEmail() {
+        when(users.replaceVerificationToken(eq("alice@example.com"), any(), any())).thenReturn(1);
+
+        service.resendVerification("  ALICE@Example.com ");
+
+        verify(mailer).sendVerification(eq("alice@example.com"), any());
+    }
+
+    @Test
+    void resendSendsNothingWhenNoUnverifiedUserMatches() {
+        // The repository returns 0 for an unknown email and for an already verified user.
+        when(users.replaceVerificationToken(any(), any(), any())).thenReturn(0);
+
+        service.resendVerification("nobody@example.com");
+
+        verify(mailer, never()).sendVerification(any(), any());
+    }
+
+    @Test
+    void everyResendGetsADifferentToken() {
+        when(users.replaceVerificationToken(any(), any(), any())).thenReturn(1);
+
+        service.resendVerification("alice@example.com");
+        service.resendVerification("alice@example.com");
+
+        ArgumentCaptor<String> tokens = ArgumentCaptor.forClass(String.class);
+        verify(mailer, times(2)).sendVerification(eq("alice@example.com"), tokens.capture());
+        assertThat(tokens.getAllValues().get(0)).isNotEqualTo(tokens.getAllValues().get(1));
+    }
+
     // ---------- helpers ----------
 
     private static User userWithId(String email, String passwordHash) {
+        User user = unverifiedUserWithId(email, passwordHash);
+        user.verifyEmail();
+
+        return user;
+    }
+
+    private static User unverifiedUserWithId(String email, String passwordHash) {
         User user = new User(email, passwordHash);
         ReflectionTestUtils.setField(user, "id", UUID.randomUUID());
 
         return user;
+    }
+
+    // The raw token that was mailed to this address (last call).
+    private String sentToken(String email) {
+        ArgumentCaptor<String> token = ArgumentCaptor.forClass(String.class);
+        verify(mailer, atLeastOnce()).sendVerification(eq(email), token.capture());
+
+        return token.getValue();
     }
 
     private static RefreshToken liveToken(User user, String rawToken) {
