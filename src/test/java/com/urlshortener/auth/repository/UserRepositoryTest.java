@@ -10,12 +10,15 @@ import com.urlshortener.link.entity.Link;
 import com.urlshortener.link.repository.LinkRepository;
 import jakarta.persistence.EntityManager;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.InvalidDataAccessApiUsageException;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 // Checks the schema rules from V2 against a real Postgres. Each test rolls back.
@@ -138,6 +141,107 @@ class UserRepositoryTest {
 
         assertThatThrownBy(() -> links.saveAndFlush(orphan)).isInstanceOf(
             DataIntegrityViolationException.class
+        );
+    }
+
+    @Test
+    void newUserIsUnverified() {
+        User saved = users.saveAndFlush(new User(uniqueEmail(), "hash"));
+        entityManager.clear();
+
+        User reloaded = users.findById(saved.getId()).orElseThrow();
+        assertThat(reloaded.isEmailVerified()).isFalse();
+        assertThat(reloaded.getVerificationTokenHash()).isNull();
+    }
+
+    @Test
+    void findsUserByVerificationTokenHash() {
+        User user = new User(uniqueEmail(), "hash");
+        String tokenHash = uniqueHash();
+        user.startVerification(tokenHash, Instant.now().plusSeconds(60));
+        users.saveAndFlush(user);
+
+        assertThat(users.findByVerificationTokenHash(tokenHash)).isPresent();
+        assertThat(users.findByVerificationTokenHash(uniqueHash())).isEmpty();
+    }
+
+    @Test
+    void verificationTokenHashIsUnique() {
+        String tokenHash = uniqueHash();
+        User first = new User(uniqueEmail(), "hash");
+        first.startVerification(tokenHash, Instant.now().plusSeconds(60));
+        users.saveAndFlush(first);
+
+        User second = new User(uniqueEmail(), "hash");
+        second.startVerification(tokenHash, Instant.now().plusSeconds(60));
+
+        assertThatThrownBy(() -> users.saveAndFlush(second))
+            .isInstanceOf(DataIntegrityViolationException.class)
+            .hasMessageContaining("uk_users_verification_token_hash");
+    }
+
+    @Test
+    void manyUsersWithoutATokenAreAllowed() {
+        // NULL never collides in a unique index, so verified users do not block each other.
+        users.saveAndFlush(new User(uniqueEmail(), "hash"));
+        users.saveAndFlush(new User(uniqueEmail(), "hash"));
+        users.saveAndFlush(new User(uniqueEmail(), "hash"));
+
+        assertThat(users.count()).isGreaterThanOrEqualTo(3);
+    }
+
+    @Test
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    void lookupByVerificationHashNeedsATransactionBecauseOfTheRowLock() {
+        assertThatThrownBy(() -> users.findByVerificationTokenHash(uniqueHash())).isInstanceOf(
+            InvalidDataAccessApiUsageException.class
+        );
+    }
+
+    @Test
+    void replaceVerificationTokenUpdatesAnUnverifiedUser() {
+        String email = uniqueEmail();
+        users.saveAndFlush(new User(email, "hash"));
+        Instant expiresAt = Instant.now().plusSeconds(600).truncatedTo(ChronoUnit.MILLIS);
+
+        int updated = users.replaceVerificationToken(email, "new-hash", expiresAt);
+        entityManager.clear();
+
+        assertThat(updated).isEqualTo(1);
+        User reloaded = users.findByEmail(email).orElseThrow();
+        assertThat(reloaded.getVerificationTokenHash()).isEqualTo("new-hash");
+        assertThat(reloaded.getVerificationExpiresAt()).isEqualTo(expiresAt);
+    }
+
+    @Test
+    void replaceVerificationTokenLeavesAVerifiedUserUntouched() {
+        String email = uniqueEmail();
+        User user = new User(email, "hash");
+        user.verifyEmail();
+        users.saveAndFlush(user);
+
+        int updated = users.replaceVerificationToken(
+            email,
+            "new-hash",
+            Instant.now().plusSeconds(60)
+        );
+        entityManager.clear();
+
+        assertThat(updated).isZero();
+        assertThat(users.findByEmail(email).orElseThrow().getVerificationTokenHash()).isNull();
+    }
+
+    @Test
+    void replaceVerificationTokenForAnUnknownEmailChangesNothing() {
+        assertThat(
+            users.replaceVerificationToken("nobody@example.com", "h", Instant.now().plusSeconds(60))
+        ).isZero();
+    }
+
+    private static String uniqueHash() {
+        return (
+            UUID.randomUUID().toString().replace("-", "") +
+            UUID.randomUUID().toString().replace("-", "")
         );
     }
 

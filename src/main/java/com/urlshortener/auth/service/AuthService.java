@@ -38,6 +38,7 @@ public class AuthService {
     private final RefreshTokenRepository refreshTokens;
     private final PasswordEncoder passwords;
     private final JwtEncoder jwtEncoder;
+    private final VerificationMailer mailer;
 
     @Value("${app.jwt.access-ttl}")
     private final Duration accessTtl;
@@ -45,11 +46,19 @@ public class AuthService {
     @Value("${app.refresh-token.ttl}")
     private final Duration refreshTtl;
 
+    @Value("${app.verification.ttl}")
+    private final Duration verificationTtl;
+
     private final SecureRandom random = new SecureRandom();
 
     public User register(String email, String password) {
+        String rawToken = newToken();
+        User user = new User(normalize(email), passwords.encode(password));
+        user.startVerification(hash(rawToken), Instant.now().plus(verificationTtl));
+
+        User saved;
         try {
-            return users.saveAndFlush(new User(normalize(email), passwords.encode(password)));
+            saved = users.saveAndFlush(user);
         } catch (DataIntegrityViolationException e) {
             String message = NestedExceptionUtils.getMostSpecificCause(e).getMessage();
             if (message != null && message.contains("uk_users_email")) {
@@ -57,6 +66,11 @@ public class AuthService {
             }
             throw e;
         }
+
+        // Sent email can not be rolled back, so they shouldn't be in a Transaction
+        mailer.sendVerification(saved.getEmail(), rawToken);
+
+        return saved;
     }
 
     @Transactional
@@ -67,6 +81,11 @@ public class AuthService {
             .orElseThrow(() ->
                 new ApiException(ErrorType.INVALID_CREDENTIALS, "Invalid email or password")
             );
+
+        if (!user.isEmailVerified()) {
+            throw new ApiException(ErrorType.EMAIL_NOT_VERIFIED, "Email is not verified");
+        }
+
         return issueTokens(user);
     }
 
@@ -95,6 +114,36 @@ public class AuthService {
             .ifPresent(t -> t.revoke(now));
     }
 
+    @Transactional
+    public void verifyEmail(String token) {
+        users
+            .findByVerificationTokenHash(hash(token))
+            .filter(u -> u.hasUsableVerification(Instant.now()))
+            .orElseThrow(() ->
+                new ApiException(
+                    ErrorType.EMAIL_VERIFICATION_TOKEN_INVALID,
+                    "Verification token is invalid or expired"
+                )
+            )
+            .verifyEmail();
+    }
+
+    // TODO: Could use async email verification to reduce the response time
+    public void resendVerification(String email) {
+        String normalized = normalize(email);
+        String rawToken = newToken();
+
+        int updated = users.replaceVerificationToken(
+            normalized,
+            hash(rawToken),
+            Instant.now().plus(verificationTtl)
+        );
+
+        if (updated == 1) {
+            mailer.sendVerification(normalized, rawToken);
+        }
+    }
+
     public Duration refreshTtl() {
         return refreshTtl;
     }
@@ -111,15 +160,19 @@ public class AuthService {
             .encode(JwtEncoderParameters.from(JwsHeader.with(MacAlgorithm.HS256).build(), claims))
             .getTokenValue();
 
-        byte[] bytes = new byte[32];
-        random.nextBytes(bytes);
-
-        String refreshToken = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        String refreshToken = newToken();
         refreshTokens.save(
             new RefreshToken(user.getId(), hash(refreshToken), now.plus(refreshTtl))
         );
 
         return new Tokens(accessToken, accessTtl.toSeconds(), refreshToken);
+    }
+
+    private String newToken() {
+        byte[] bytes = new byte[32];
+        random.nextBytes(bytes);
+
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
     static String hash(String token) {

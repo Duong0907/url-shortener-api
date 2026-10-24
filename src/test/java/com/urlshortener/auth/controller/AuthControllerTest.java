@@ -4,6 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.hasSize;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -14,22 +18,33 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.jayway.jsonpath.JsonPath;
 import com.urlshortener.TestcontainersConfiguration;
 import com.urlshortener.auth.entity.RefreshToken;
+import com.urlshortener.auth.entity.User;
 import com.urlshortener.auth.repository.RefreshTokenRepository;
 import com.urlshortener.auth.repository.UserRepository;
 import jakarta.servlet.http.Cookie;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
+import java.time.Instant;
 import java.util.HexFormat;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.mail.MailSendException;
+import org.springframework.mail.SimpleMailMessage;
+import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
@@ -43,6 +58,9 @@ class AuthControllerTest {
 
     @Autowired
     MockMvc mvc;
+
+    @MockitoBean
+    JavaMailSender mailSender;
 
     @Autowired
     JwtDecoder jwtDecoder;
@@ -72,9 +90,10 @@ class AuthControllerTest {
     }
 
     @Test
-    void registerResponseHasOnlyIdAndEmail() throws Exception {
+    void registerResponseHasIdEmailAndVerificationFlag() throws Exception {
         register("alice@example.com", "correct-horse")
-            .andExpect(jsonPath("$.*", hasSize(2)))
+            .andExpect(jsonPath("$.*", hasSize(3)))
+            .andExpect(jsonPath("$.emailVerified").value(false))
             .andExpect(jsonPath("$.id").isNotEmpty())
             .andExpect(jsonPath("$.passwordHash").doesNotExist())
             .andExpect(jsonPath("$.password").doesNotExist());
@@ -127,6 +146,36 @@ class AuthControllerTest {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.errors[*].field", hasItem("email")))
             .andExpect(jsonPath("$.errors[*].field", hasItem("password")));
+    }
+
+    @Test
+    void rejectsMismatchedConfirmation() throws Exception {
+        postJson(
+            "/api/auth/register",
+            registration("alice@example.com", "correct-horse", "correct-horsE")
+        )
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.type").value("urn:problem:validation-failed"))
+            .andExpect(jsonPath("$.errors[*].field", hasItem("confirmPassword")));
+        assertThat(users.count()).isZero();
+    }
+
+    @Test
+    void rejectsMissingConfirmation() throws Exception {
+        postJson(
+            "/api/auth/register",
+            "{\"email\":\"alice@example.com\",\"password\":\"correct-horse\"}"
+        )
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errors[*].field", hasItem("confirmPassword")));
+    }
+
+    @Test
+    void reportsMismatchTogetherWithOtherFieldErrors() throws Exception {
+        postJson("/api/auth/register", registration("not-an-email", "correct-horse", "other-pass"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errors[*].field", hasItem("email")))
+            .andExpect(jsonPath("$.errors[*].field", hasItem("confirmPassword")));
     }
 
     @Test
@@ -409,14 +458,261 @@ class AuthControllerTest {
         mvc.perform(post("/api/auth/refresh").cookie(laptop)).andExpect(status().isOk());
     }
 
+    // ---------- email verification ----------
+
+    @Test
+    void registerSendsOneVerificationMailWithALink() throws Exception {
+        register("alice@example.com", "correct-horse").andExpect(status().isCreated());
+
+        ArgumentCaptor<SimpleMailMessage> sent = ArgumentCaptor.forClass(SimpleMailMessage.class);
+        verify(mailSender).send(sent.capture());
+        assertThat(sent.getValue().getTo()).containsExactly("alice@example.com");
+        assertThat(sent.getValue().getText()).contains("/verify-email?token=");
+    }
+
+    @Test
+    void registerResponseNeverContainsTheToken() throws Exception {
+        String body = register("alice@example.com", "correct-horse")
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+        assertThat(body).doesNotContain(mailedToken());
+    }
+
+    @Test
+    void failedRegistrationSendsNoMail() throws Exception {
+        register("alice@example.com", "correct-horse");
+        Mockito.clearInvocations(mailSender);
+
+        register("alice@example.com", "other-passw0rd").andExpect(status().isConflict());
+        postJson(
+            "/api/auth/register",
+            registration("bad", "correct-horse", "correct-horse")
+        ).andExpect(status().isBadRequest());
+
+        verify(mailSender, never()).send(any(SimpleMailMessage.class));
+    }
+
+    @Test
+    void aMailOutageDoesNotFailRegistration() throws Exception {
+        Mockito.doThrow(new MailSendException("down"))
+            .when(mailSender)
+            .send(any(SimpleMailMessage.class));
+
+        register("alice@example.com", "correct-horse").andExpect(status().isCreated());
+
+        assertThat(users.findByEmail("alice@example.com")).isPresent();
+    }
+
+    @Test
+    void loginBeforeVerificationIsForbidden() throws Exception {
+        register("alice@example.com", "correct-horse");
+
+        postJson("/api/auth/login", credentials("alice@example.com", "correct-horse"))
+            .andExpect(status().isForbidden())
+            .andExpect(jsonPath("$.type").value("urn:problem:email-not-verified"))
+            .andExpect(header().doesNotExist("Set-Cookie"));
+        assertThat(refreshTokens.count()).isZero();
+    }
+
+    @Test
+    void wrongPasswordBeforeVerificationIsStillUnauthorized() throws Exception {
+        register("alice@example.com", "correct-horse");
+
+        postJson("/api/auth/login", credentials("alice@example.com", "wrong-password"))
+            .andExpect(status().isUnauthorized())
+            .andExpect(jsonPath("$.type").value("urn:problem:invalid-credentials"));
+    }
+
+    @Test
+    void verifyingTheMailedTokenUnlocksLogin() throws Exception {
+        register("alice@example.com", "correct-horse");
+
+        verifyEmail(mailedToken()).andExpect(status().isNoContent());
+
+        postJson("/api/auth/login", credentials("alice@example.com", "correct-horse"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.accessToken").isNotEmpty());
+    }
+
+    @Test
+    void aTokenWorksOnlyOnce() throws Exception {
+        register("alice@example.com", "correct-horse");
+        String token = mailedToken();
+
+        verifyEmail(token).andExpect(status().isNoContent());
+
+        verifyEmail(token)
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.type").value("urn:problem:email-verification-token-invalid"));
+    }
+
+    @Test
+    void unknownTokenIsRejected() throws Exception {
+        verifyEmail("not-a-real-token")
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.type").value("urn:problem:email-verification-token-invalid"));
+    }
+
+    @Test
+    void tokenIsCaseSensitive() throws Exception {
+        register("alice@example.com", "correct-horse");
+        String token = mailedToken();
+        String flipped = token
+            .chars()
+            .mapToObj(c ->
+                String.valueOf(
+                    Character.isUpperCase(c)
+                        ? Character.toLowerCase((char) c)
+                        : Character.toUpperCase((char) c)
+                )
+            )
+            .collect(Collectors.joining());
+
+        verifyEmail(flipped).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void expiredTokenIsRejectedAndTheUserStaysUnverified() throws Exception {
+        register("alice@example.com", "correct-horse");
+        String token = mailedToken();
+        User user = users.findByEmail("alice@example.com").orElseThrow();
+        user.startVerification(user.getVerificationTokenHash(), Instant.now().minusSeconds(1));
+        users.save(user);
+
+        verifyEmail(token)
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.type").value("urn:problem:email-verification-token-invalid"));
+        assertThat(
+            users.findByEmail("alice@example.com").orElseThrow().isEmailVerified()
+        ).isFalse();
+    }
+
+    @Test
+    void blankOrMissingTokenIsAValidationError() throws Exception {
+        postJson("/api/auth/verify-email", "{\"token\":\"\"}")
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errors[*].field", hasItem("token")));
+        postJson("/api/auth/verify-email", "{}").andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void verifyEmailRejectsGet() throws Exception {
+        // A link scanner that prefetches the URL must not be able to consume a token.
+        mvc.perform(get("/api/auth/verify-email")).andExpect(status().isMethodNotAllowed());
+    }
+
+    @Test
+    void resendInvalidatesTheOldLink() throws Exception {
+        register("alice@example.com", "correct-horse");
+        String first = mailedToken();
+
+        resend("alice@example.com").andExpect(status().isNoContent());
+        String second = mailedToken();
+
+        assertThat(second).isNotEqualTo(first);
+        verifyEmail(first).andExpect(status().isBadRequest());
+        verifyEmail(second).andExpect(status().isNoContent());
+    }
+
+    @Test
+    void resendNormalizesTheEmail() throws Exception {
+        register("alice@example.com", "correct-horse");
+        Mockito.clearInvocations(mailSender);
+
+        resend("ALICE@Example.com").andExpect(status().isNoContent());
+
+        verify(mailSender).send(any(SimpleMailMessage.class));
+    }
+
+    @Test
+    void resendForAnUnknownEmailLooksLikeSuccessAndSendsNothing() throws Exception {
+        resend("nobody@example.com")
+            .andExpect(status().isNoContent())
+            .andExpect(content().string(""));
+
+        verify(mailSender, never()).send(any(SimpleMailMessage.class));
+    }
+
+    @Test
+    void resendForAVerifiedEmailLooksLikeSuccessAndSendsNothing() throws Exception {
+        register("alice@example.com", "correct-horse");
+        verifyEmail(mailedToken()).andExpect(status().isNoContent());
+        Mockito.clearInvocations(mailSender);
+
+        resend("alice@example.com").andExpect(status().isNoContent());
+
+        verify(mailSender, never()).send(any(SimpleMailMessage.class));
+        assertThat(
+            users.findByEmail("alice@example.com").orElseThrow().getVerificationTokenHash()
+        ).isNull();
+    }
+
+    @Test
+    void resendRejectsAMalformedEmail() throws Exception {
+        resend("not-an-email")
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errors[*].field", hasItem("email")));
+        postJson("/api/auth/resend-verification", "{}").andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void verificationEndpointsNeedNoAccessToken() throws Exception {
+        // No Authorization header is sent, and neither call is answered with 401.
+        resend("nobody@example.com").andExpect(status().isNoContent());
+        verifyEmail("x").andExpect(status().isBadRequest());
+    }
+
     // ---------- helpers ----------
 
     private ResultActions register(String email, String password) throws Exception {
-        return postJson("/api/auth/register", credentials(email, password));
+        return postJson("/api/auth/register", registration(email, password, password));
+    }
+
+    private static String registration(String email, String password, String confirmPassword) {
+        return (
+            "{\"email\":\"" +
+            email +
+            "\",\"password\":\"" +
+            password +
+            "\",\"confirmPassword\":\"" +
+            confirmPassword +
+            "\"}"
+        );
     }
 
     private ResultActions login(String email, String password) throws Exception {
+        verifyInDatabase(email);
+
         return postJson("/api/auth/login", credentials(email, password));
+    }
+
+    private void verifyInDatabase(String email) {
+        users.findByEmail(email.trim().toLowerCase()).ifPresent(user -> {
+            user.verifyEmail();
+            users.save(user);
+        });
+    }
+
+    private static final Pattern TOKEN_IN_LINK = Pattern.compile("token=([A-Za-z0-9_-]+)");
+
+    // The raw token from the most recent verification mail.
+    private String mailedToken() {
+        ArgumentCaptor<SimpleMailMessage> sent = ArgumentCaptor.forClass(SimpleMailMessage.class);
+        verify(mailSender, atLeastOnce()).send(sent.capture());
+        Matcher matcher = TOKEN_IN_LINK.matcher(sent.getValue().getText());
+        assertThat(matcher.find()).isTrue();
+
+        return matcher.group(1);
+    }
+
+    private ResultActions verifyEmail(String token) throws Exception {
+        return postJson("/api/auth/verify-email", "{\"token\":\"" + token + "\"}");
+    }
+
+    private ResultActions resend(String email) throws Exception {
+        return postJson("/api/auth/resend-verification", "{\"email\":\"" + email + "\"}");
     }
 
     private Cookie loginCookie(String email, String password) throws Exception {
