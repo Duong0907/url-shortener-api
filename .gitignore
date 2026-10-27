@@ -54,8 +54,4 @@ docs/
 ### Node (Prettier) ###
 node_modules/
 
-### Superpowers docs
-docs/superpowers/d
-
 *.pem
-docker-compose.yml
