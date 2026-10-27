@@ -23,7 +23,7 @@ services:
     image: lscr.io/linuxserver/duckdns:latest
     restart: unless-stopped
     environment:
-      SUBDOMAINS: shink
+      SUBDOMAINS: fshort
       TOKEN: ${DUCKDNS_TOKEN}
       TZ: Asia/Ho_Chi_Minh
 
