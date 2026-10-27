@@ -100,6 +100,33 @@ The HTML report is in `target/site/jacoco/index.html`.
 GitHub Actions (`.github/workflows/ci.yml`) runs `./mvnw verify` on every push to `master`/`main` and on every pull request.
 It uploads the JaCoCo report as the `jacoco-report` artifact.
 
+## Deploy
+
+A push to `master` runs tests, pushes `duong0907/url-shortener-api-app:{latest,<sha>}` to Docker Hub,
+and deploys to EC2 over SSH. Run it by hand with `gh workflow run ci.yml --ref master`.
+
+Repository secrets (Settings → Secrets and variables → Actions):
+
+| Name | Value |
+|---|---|
+| `DOCKERHUB_USERNAME` | Docker Hub user |
+| `DOCKERHUB_TOKEN` | Docker Hub access token, Read & Write |
+| `EC2_HOST` | EC2 public IP or DNS name |
+| `EC2_USER` | SSH user, e.g. `ubuntu` |
+| `EC2_SSH_KEY` | Private key (`.pem` contents) |
+| `ENV_FILE` | Full contents of `.env.prod` |
+
+Change an env value:
+
+```sh
+# edit .env.prod, then:
+gh secret set ENV_FILE < .env.prod
+gh workflow run ci.yml --ref master
+```
+
+Roll back: on the instance, set `IMAGE_TAG=<old sha>` in `~/app/.env`, then run
+`docker compose up -d` in `~/app`.
+
 ## Project layout
 
 ```text

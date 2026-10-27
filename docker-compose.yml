@@ -1,0 +1,32 @@
+# Production stack on EC2. CD copies this file to ~/app and writes ~/app/.env.
+# IMAGE_TAG and DUCKDNS_TOKEN come from .env through variable substitution.
+services:
+  app:
+    image: duong0907/fast-shortener-api:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+  duckdns:
+    image: lscr.io/linuxserver/duckdns:latest
+    restart: unless-stopped
+    environment:
+      SUBDOMAINS: shink
+      TOKEN: ${DUCKDNS_TOKEN}
+      TZ: Asia/Ho_Chi_Minh
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,50 +1,145 @@
 name: CI
 
 on:
-  push:
-    branches: [master, main]
-  pull_request:
+    push:
+        branches: [master]
+    pull_request:
+    workflow_dispatch:
 
 permissions:
-  contents: read
+    contents: read
 
+# Cancel superseded runs on branches and PRs. On master a run can be mid-deploy,
+# so never cancel it: newer master runs wait instead.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+    group: ci-${{ github.ref }}
+    cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
+env:
+    IMAGE: duong0907/fast-shortener-api
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
+    test:
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        steps:
+            - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
-          cache: maven
+            - uses: actions/setup-java@v4
+              with:
+                  distribution: temurin
+                  java-version: 21
+                  cache: maven
 
-      # Fail fast on unformatted Java. Fix locally with: npm run format
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
+            # Fail fast on unformatted Java. Fix locally with: npm run format
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: npm
 
-      - name: Check Java formatting
-        run: |
-          npm ci
-          npm run format:check
+            - name: Check Java formatting
+              run: |
+                  npm ci
+                  npm run format:check
 
-      # Docker is preinstalled on ubuntu-latest, so Testcontainers starts Postgres 16 itself.
-      # verify = tests + JaCoCo report + coverage threshold (pom.xml: coverage.minimum).
-      - name: Build, test and check coverage
-        run: ./mvnw -B verify
+            # Docker is preinstalled on ubuntu-latest, so Testcontainers starts Postgres 16 itself.
+            # verify = tests + JaCoCo report + coverage threshold (pom.xml: coverage.minimum).
+            - name: Build, test and check coverage
+              run: ./mvnw -B verify
 
-      - name: Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: jacoco-report
-          path: target/site/jacoco
-          if-no-files-found: ignore
+            - name: Upload coverage report
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: jacoco-report
+                  path: target/site/jacoco
+                  if-no-files-found: ignore
+
+    image:
+        needs: test
+        if: github.ref == 'refs/heads/master'
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: docker/setup-buildx-action@v3
+
+            - uses: docker/login-action@v3
+              with:
+                  username: ${{ secrets.DOCKERHUB_USERNAME }}
+                  password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+            - uses: docker/build-push-action@v6
+              with:
+                  context: .
+                  platforms: linux/amd64
+                  push: true
+                  tags: |
+                      ${{ env.IMAGE }}:latest
+                      ${{ env.IMAGE }}:${{ github.sha }}
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
+ 
+    deploy:
+        needs: image
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        # One deploy at a time. A running deploy is never cancelled.
+        concurrency:
+            group: deploy-production
+            cancel-in-progress: false
+        env:
+            EC2_HOST: ${{ secrets.EC2_HOST }}
+            EC2_USER: ${{ secrets.EC2_USER }}
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Set up SSH key
+              env:
+                  EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+              run: |
+                  mkdir -p ~/.ssh
+                  printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/ec2
+                  chmod 600 ~/.ssh/ec2
+                  ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+
+            - name: Copy compose file and Caddyfile
+              run: |
+                  ssh -i ~/.ssh/ec2 "$EC2_USER@$EC2_HOST" 'mkdir -p ~/app'
+                  scp -i ~/.ssh/ec2 docker-compose.yml Caddyfile "$EC2_USER@$EC2_HOST:~/app/"
+
+            # Build .env on the runner, copy it to EC2, then delete the local copy.
+            # The secret is read from env, so it never shows on a command line.
+            - name: Write .env
+              env:
+                  ENV_FILE: ${{ secrets.ENV_FILE }}
+              run: |
+                  umask 077   # New files are owner-only (600). scp keeps that mode on EC2.
+                  printf '%s\n' "$ENV_FILE" > .env
+                  printf 'IMAGE_TAG=%s\n' "$GITHUB_SHA" >> .env
+                  scp -i ~/.ssh/ec2 .env "$EC2_USER@$EC2_HOST:~/app/.env"
+                  rm .env
+
+            - name: Pull image and restart
+              run: |
+                  # The heredoc runs on EC2. set -e stops at the first failed command.
+                  ssh -i ~/.ssh/ec2 "$EC2_USER@$EC2_HOST" bash -s <<'EOF'
+                  set -e
+                  cd ~/app
+                  docker compose pull
+                  docker compose up -d --remove-orphans
+                  docker image prune -f
+                  EOF
+
+            - name: Health check
+              run: |
+                  # Fail on HTTP >= 400. Retry for about 60s while the app boots.
+                  curl \
+                    --fail \
+                    --silent \
+                    --show-error \
+                    --retry 10 \
+                    --retry-delay 6 \
+                    --retry-all-errors \
+                    https://fshort.duckdns.org/health
