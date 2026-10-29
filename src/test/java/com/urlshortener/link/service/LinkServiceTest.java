@@ -37,7 +37,7 @@ class LinkServiceTest {
     void createsLinkWithGeneratedSlug() {
         when(slugs.next()).thenReturn("abc1234");
 
-        Link link = service.create("https://example.com", "203.0.113.7");
+        Link link = service.create("https://example.com", null, "203.0.113.7");
 
         assertThat(link.getId()).isNotNull();
         assertThat(link.getSlug()).isEqualTo("abc1234");
@@ -50,7 +50,7 @@ class LinkServiceTest {
         links.saveAndFlush(new Link("taken00", "https://example.com", null, false, null, null));
         when(slugs.next()).thenReturn("taken00", "free000");
 
-        Link link = service.create("https://example.org", null);
+        Link link = service.create("https://example.org", null, null);
 
         assertThat(link.getSlug()).isEqualTo("free000");
     }
@@ -60,7 +60,7 @@ class LinkServiceTest {
         links.saveAndFlush(new Link("taken00", "https://example.com", null, false, null, null));
         when(slugs.next()).thenReturn("taken00");
 
-        assertThatThrownBy(() -> service.create("https://example.org", null)).isInstanceOf(
+        assertThatThrownBy(() -> service.create("https://example.org", null, null)).isInstanceOf(
             DataIntegrityViolationException.class
         );
     }

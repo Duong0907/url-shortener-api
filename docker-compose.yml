@@ -7,7 +7,7 @@ services:
     env_file: .env
 
   caddy:
-    image: caddy:2
+    image: caddy:2.11.7
     restart: unless-stopped
     ports:
       - "80:80"
@@ -20,7 +20,7 @@ services:
       - app
 
   duckdns:
-    image: lscr.io/linuxserver/duckdns:latest
+    image: lscr.io/linuxserver/duckdns:8aabc87c-ls95
     restart: unless-stopped
     environment:
       SUBDOMAINS: fshort

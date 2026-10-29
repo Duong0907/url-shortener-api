@@ -1,19 +1,31 @@
 package com.urlshortener.link.controller;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.matchesPattern;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.urlshortener.TestcontainersConfiguration;
+import com.urlshortener.auth.entity.User;
+import com.urlshortener.auth.repository.UserRepository;
+import com.urlshortener.link.entity.Link;
+import com.urlshortener.link.repository.LinkRepository;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -22,6 +34,15 @@ class LinkControllerTest {
 
     @Autowired
     MockMvc mvc;
+
+    @Autowired
+    UserRepository users;
+
+    @Autowired
+    LinkRepository links;
+
+    @Autowired
+    JdbcTemplate jdbc;
 
     @Test
     void createsAnonymousLink() throws Exception {
@@ -63,5 +84,86 @@ class LinkControllerTest {
             .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
             .andExpect(jsonPath("$.type").value("urn:problem:url-invalid"))
             .andExpect(jsonPath("$.detail").value("Only http and https URLs are allowed"));
+    }
+
+    @Test
+    void createWithTokenSavesTheCallerAsOwner() throws Exception {
+        UUID ownerId = newUser();
+
+        String body = mvc
+            .perform(
+                post("/api/links")
+                    .with(loggedInAs(ownerId))
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"targetUrl\":\"https://example.com/owned\"}")
+            )
+            .andExpect(status().isCreated())
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+        String slug = body.replaceAll(".*\"slug\":\"([^\"]+)\".*", "$1");
+        assertThat(links.findBySlug(slug)).get().extracting(Link::getOwnerId).isEqualTo(ownerId);
+    }
+
+    @Test
+    void listReturnsOnlyTheCallersLinksNewestFirst() throws Exception {
+        UUID ownerId = newUser();
+        UUID otherId = newUser();
+        saveLink("older01", ownerId, Instant.parse("2026-01-01T00:00:00Z"));
+        saveLink("newer01", ownerId, Instant.parse("2026-02-01T00:00:00Z"));
+        saveLink("other01", otherId, Instant.parse("2026-03-01T00:00:00Z"));
+
+        mvc.perform(get("/api/links").with(loggedInAs(ownerId)))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.content.length()").value(2))
+            .andExpect(jsonPath("$.content[0].slug").value("newer01"))
+            .andExpect(jsonPath("$.content[1].slug").value("older01"))
+            .andExpect(jsonPath("$.content[0].shortUrl").value("http://localhost:8080/newer01"))
+            .andExpect(jsonPath("$.content[0].targetUrl").value("https://example.com/newer01"))
+            .andExpect(jsonPath("$.page.totalElements").value(2));
+    }
+
+    @Test
+    void listIsPaginated() throws Exception {
+        UUID ownerId = newUser();
+        saveLink("page001", ownerId, Instant.parse("2026-01-01T00:00:00Z"));
+        saveLink("page002", ownerId, Instant.parse("2026-01-02T00:00:00Z"));
+        saveLink("page003", ownerId, Instant.parse("2026-01-03T00:00:00Z"));
+
+        mvc.perform(
+            get("/api/links").param("page", "1").param("size", "2").with(loggedInAs(ownerId))
+        )
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.content.length()").value(1))
+            .andExpect(jsonPath("$.content[0].slug").value("page001"))
+            .andExpect(jsonPath("$.page.totalPages").value(2));
+    }
+
+    @Test
+    void listNeedsALogin() throws Exception {
+        mvc.perform(get("/api/links")).andExpect(status().isUnauthorized());
+    }
+
+    private UUID newUser() {
+        return users
+            .saveAndFlush(new User("user-" + UUID.randomUUID() + "@example.com", "hash"))
+            .getId();
+    }
+
+    private void saveLink(String slug, UUID ownerId, Instant createdAt) {
+        links.saveAndFlush(
+            new Link(slug, "https://example.com/" + slug, ownerId, false, null, null)
+        );
+        // created_at is not updatable through JPA, so backdate it with SQL.
+        jdbc.update(
+            "UPDATE links SET created_at = ? WHERE slug = ?",
+            Timestamp.from(createdAt),
+            slug
+        );
+    }
+
+    private static RequestPostProcessor loggedInAs(UUID userId) {
+        return jwt().jwt(token -> token.subject(userId.toString()));
     }
 }

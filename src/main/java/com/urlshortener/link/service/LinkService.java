@@ -2,9 +2,12 @@ package com.urlshortener.link.service;
 
 import com.urlshortener.link.entity.Link;
 import com.urlshortener.link.repository.LinkRepository;
+import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.NestedExceptionUtils;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -19,12 +22,13 @@ public class LinkService {
 
     // Not @Transactional on purpose: each saveAndFlush runs in its own transaction,
     // so a failed insert rolls back alone and the next attempt starts clean.
-    public Link create(String targetUrl, String createdIp) {
+    // ownerId is null for anonymous callers.
+    public Link create(String targetUrl, UUID ownerId, String createdIp) {
         urls.validate(targetUrl);
         for (int attempt = 1; ; attempt++) {
             try {
                 return links.saveAndFlush(
-                    new Link(slugs.next(), targetUrl, null, false, null, createdIp)
+                    new Link(slugs.next(), targetUrl, ownerId, false, null, createdIp)
                 );
             } catch (DataIntegrityViolationException e) {
                 if (!isSlugConflict(e) || attempt == MAX_SLUG_ATTEMPTS) {
@@ -32,6 +36,10 @@ public class LinkService {
                 }
             }
         }
+    }
+
+    public Page<Link> listOwned(UUID ownerId, Pageable pageable) {
+        return links.findByOwnerIdOrderByCreatedAtDesc(ownerId, pageable);
     }
 
     static boolean isSlugConflict(DataIntegrityViolationException e) {
