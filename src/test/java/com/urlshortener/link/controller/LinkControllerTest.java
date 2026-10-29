@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.jayway.jsonpath.JsonPath;
 import com.urlshortener.TestcontainersConfiguration;
 import com.urlshortener.auth.entity.User;
 import com.urlshortener.auth.repository.UserRepository;
@@ -16,6 +17,8 @@ import com.urlshortener.link.entity.Link;
 import com.urlshortener.link.repository.LinkRepository;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -116,28 +119,52 @@ class LinkControllerTest {
 
         mvc.perform(get("/api/links").with(loggedInAs(ownerId)))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.content.length()").value(2))
-            .andExpect(jsonPath("$.content[0].slug").value("newer01"))
-            .andExpect(jsonPath("$.content[1].slug").value("older01"))
-            .andExpect(jsonPath("$.content[0].shortUrl").value("http://localhost:8080/newer01"))
-            .andExpect(jsonPath("$.content[0].targetUrl").value("https://example.com/newer01"))
-            .andExpect(jsonPath("$.page.totalElements").value(2));
+            .andExpect(jsonPath("$.items.length()").value(2))
+            .andExpect(jsonPath("$.items[0].slug").value("newer01"))
+            .andExpect(jsonPath("$.items[1].slug").value("older01"))
+            .andExpect(jsonPath("$.items[0].shortUrl").value("http://localhost:8080/newer01"))
+            .andExpect(jsonPath("$.items[0].targetUrl").value("https://example.com/newer01"))
+            .andExpect(jsonPath("$.nextCursor").doesNotExist());
     }
 
     @Test
-    void listIsPaginated() throws Exception {
+    void listLoadsMoreWithCursor() throws Exception {
         UUID ownerId = newUser();
-        saveLink("page001", ownerId, Instant.parse("2026-01-01T00:00:00Z"));
-        saveLink("page002", ownerId, Instant.parse("2026-01-02T00:00:00Z"));
-        saveLink("page003", ownerId, Instant.parse("2026-01-03T00:00:00Z"));
+        Instant sameTime = Instant.parse("2026-01-02T00:00:00Z");
+        saveLink("more001", ownerId, Instant.parse("2026-01-01T00:00:00Z"));
+        // Two links share a createdAt, so the cursor must break the tie by id.
+        saveLink("more002", ownerId, sameTime);
+        saveLink("more003", ownerId, sameTime);
 
-        mvc.perform(
-            get("/api/links").param("page", "1").param("size", "2").with(loggedInAs(ownerId))
-        )
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.content.length()").value(1))
-            .andExpect(jsonPath("$.content[0].slug").value("page001"))
-            .andExpect(jsonPath("$.page.totalPages").value(2));
+        Set<String> seen = new HashSet<>();
+        String cursor = null;
+        int batches = 0;
+        do {
+            var request = get("/api/links").param("limit", "1").with(loggedInAs(ownerId));
+            if (cursor != null) {
+                request.param("cursor", cursor);
+            }
+            String body = mvc
+                .perform(request)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+            seen.add(JsonPath.read(body, "$.items[0].slug"));
+            cursor = JsonPath.read(body, "$.nextCursor");
+            batches++;
+        } while (cursor != null);
+
+        assertThat(batches).isEqualTo(3);
+        assertThat(seen).containsExactlyInAnyOrder("more001", "more002", "more003");
+    }
+
+    @Test
+    void listRejectsInvalidCursor() throws Exception {
+        mvc.perform(get("/api/links").param("cursor", "garbage").with(loggedInAs(newUser())))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.type").value("urn:problem:validation-failed"));
     }
 
     @Test
@@ -165,5 +192,51 @@ class LinkControllerTest {
 
     private static RequestPostProcessor loggedInAs(UUID userId) {
         return jwt().jwt(token -> token.subject(userId.toString()));
+    }
+
+    @Test
+    void customSlugNeedsLogin() throws Exception {
+        mvc.perform(
+            post("/api/links")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"targetUrl\":\"https://example.com\",\"slug\":\"my-link\"}")
+        )
+            .andExpect(status().isUnauthorized())
+            .andExpect(jsonPath("$.type").value("urn:problem:login-required"));
+    }
+
+    @Test
+    void createsCustomLinkForLoggedInUser() throws Exception {
+        mvc.perform(
+            post("/api/links")
+                .with(loggedInAs(newUser()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"targetUrl\":\"https://example.com\",\"slug\":\"ctrl-custom\"}")
+        )
+            .andExpect(status().isCreated())
+            .andExpect(jsonPath("$.slug").value("ctrl-custom"))
+            .andExpect(jsonPath("$.shortUrl").value("http://localhost:8080/ctrl-custom"));
+
+        // Second use of the same slug conflicts.
+        mvc.perform(
+            post("/api/links")
+                .with(loggedInAs(newUser()))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"targetUrl\":\"https://example.org\",\"slug\":\"ctrl-custom\"}")
+        )
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.type").value("urn:problem:slug-taken"));
+    }
+
+    @Test
+    void rejectsMalformedCustomSlug() throws Exception {
+        mvc.perform(
+            post("/api/links")
+                .with(jwt().jwt(j -> j.subject(UUID.randomUUID().toString())))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"targetUrl\":\"https://example.com\",\"slug\":\"a b\"}")
+        )
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errors[0].field").value("slug"));
     }
 }
