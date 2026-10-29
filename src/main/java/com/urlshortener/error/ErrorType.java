@@ -14,6 +14,8 @@ public enum ErrorType {
         "Request validation failed",
         HttpStatus.BAD_REQUEST
     ),
+    SLUG_TAKEN("urn:problem:slug-taken", "Slug is not available", HttpStatus.CONFLICT),
+    LOGIN_REQUIRED("urn:problem:login-required", "Login is required", HttpStatus.UNAUTHORIZED),
     EMAIL_TAKEN("urn:problem:email-taken", "Email is already registered", HttpStatus.CONFLICT),
     INVALID_CREDENTIALS(
         "urn:problem:invalid-credentials",

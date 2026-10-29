@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
 import com.urlshortener.TestcontainersConfiguration;
+import com.urlshortener.error.ApiException;
+import com.urlshortener.error.ErrorType;
 import com.urlshortener.link.entity.Link;
 import com.urlshortener.link.repository.LinkRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,7 +39,7 @@ class LinkServiceTest {
     void createsLinkWithGeneratedSlug() {
         when(slugs.next()).thenReturn("abc1234");
 
-        Link link = service.create("https://example.com", null, "203.0.113.7");
+        Link link = service.create("https://example.com", null, null, "203.0.113.7");
 
         assertThat(link.getId()).isNotNull();
         assertThat(link.getSlug()).isEqualTo("abc1234");
@@ -50,7 +52,7 @@ class LinkServiceTest {
         links.saveAndFlush(new Link("taken00", "https://example.com", null, false, null, null));
         when(slugs.next()).thenReturn("taken00", "free000");
 
-        Link link = service.create("https://example.org", null, null);
+        Link link = service.create("https://example.org", null, null, null);
 
         assertThat(link.getSlug()).isEqualTo("free000");
     }
@@ -60,8 +62,36 @@ class LinkServiceTest {
         links.saveAndFlush(new Link("taken00", "https://example.com", null, false, null, null));
         when(slugs.next()).thenReturn("taken00");
 
-        assertThatThrownBy(() -> service.create("https://example.org", null, null)).isInstanceOf(
-            DataIntegrityViolationException.class
+        assertThatThrownBy(() ->
+            service.create("https://example.org", null, null, null)
+        ).isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void createsCustomLink() {
+        Link link = service.create("https://example.com", "my-link", null, null);
+
+        assertThat(link.getSlug()).isEqualTo("my-link");
+        assertThat(link.isCustom()).isTrue();
+    }
+
+    @Test
+    void rejectsTakenCustomSlug() {
+        links.saveAndFlush(new Link("my-link", "https://example.com", null, false, null, null));
+
+        assertThatThrownBy(() ->
+            service.create("https://example.org", "my-link", null, null)
+        ).isInstanceOfSatisfying(ApiException.class, e ->
+            assertThat(e.getErrorType()).isEqualTo(ErrorType.SLUG_TAKEN)
+        );
+    }
+
+    @Test
+    void rejectsReservedCustomSlug() {
+        assertThatThrownBy(() ->
+            service.create("https://example.org", "API", null, null)
+        ).isInstanceOfSatisfying(ApiException.class, e ->
+            assertThat(e.getErrorType()).isEqualTo(ErrorType.SLUG_TAKEN)
         );
     }
 }
